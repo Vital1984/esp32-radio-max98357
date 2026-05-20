@@ -1,3 +1,24 @@
+/*
+ * ESP32-S3 Internet Radio
+ * ════════════════════════════════════════════════════════════════
+ * Board   : ESP32-S3-DevKitC-1  N16R8  (16 MB Flash, 8 MB PSRAM)
+ * Library : schreibfaul1 / ESP32-audioI2S
+ *
+ * MAX98357A (I2S Verstärker)
+ *   GPIO4  → BCLK
+ *   GPIO5  → LRC
+ *   GPIO6  → DIN
+ *   3.3 V  → VIN
+ *   GND    → GND + SD
+ *
+ * Taster (→ GND, INPUT_PULLUP)
+ *   GPIO1  → Senderwechsel
+ *   GPIO2  → Mute
+ *   GPIO41 → Volume +
+ *   GPIO42 → Volume -
+ * ════════════════════════════════════════════════════════════════
+ */
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <Audio.h>
