@@ -48,28 +48,51 @@ bool pressed(Btn& b) {
 }
 
 // ── Hilfsfunktionen ───────────────────────────────────────────────────────────
+void printSeparator() { Serial.println("─────────────────────────────────────────"); }
+
 void playStation() {
-    Serial.printf("[Radio] Station %d: %s\n", currentStation + 1, stations[currentStation]);
+    printSeparator();
+    Serial.printf("[Radio] ▶ Station %d/%d\n", currentStation + 1, NUM_STATIONS);
+    Serial.printf("[Radio]   %s\n", stations[currentStation]);
+    printSeparator();
     audio.connecttohost(stations[currentStation]);
 }
 
 void connectWiFi() {
     WiFi.begin(ssid, password);
-    Serial.print("[WiFi]  Verbinde");
+    Serial.print("[WiFi]  Verbinde mit \"");
+    Serial.print(ssid);
+    Serial.print("\"");
     while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
-    Serial.printf("\n[WiFi]  Verbunden – IP: %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("\n[WiFi]  ✓ Verbunden\n");
+    Serial.printf("[WiFi]  IP  : %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("[WiFi]  RSSI: %d dBm\n", WiFi.RSSI());
 }
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
 void setup() {
     Serial.begin(115200);
+    delay(500);
+
+    printSeparator();
+    Serial.println("[Boot]  ESP32-S3 Internet Radio");
+    Serial.printf("[Boot]  Chip: %s  Rev: %d\n", ESP.getChipModel(), ESP.getChipRevision());
+    Serial.printf("[Boot]  Flash: %d MB  PSRAM: %d KB\n",
+                  ESP.getFlashChipSize() / (1024 * 1024),
+                  ESP.getPsramSize() / 1024);
+    Serial.printf("[Boot]  Free Heap: %d Bytes\n", ESP.getFreeHeap());
+    printSeparator();
 
     for (auto& b : btns) pinMode(b.pin, INPUT_PULLUP);
 
     connectWiFi();
 
+    Serial.println("[Audio] Initialisiere I2S ...");
     audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
     audio.setVolume(volume);
+    Serial.printf("[Audio] BCLK=GPIO%d  LRC=GPIO%d  DOUT=GPIO%d\n", I2S_BCLK, I2S_LRC, I2S_DOUT);
+    Serial.printf("[Audio] Startlautstärke: %d/21\n", volume);
+
     playStation();
 }
 
@@ -79,7 +102,8 @@ void loop() {
 
     // WiFi-Reconnect
     if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("[WiFi]  Verbindung verloren – reconnect ...");
+        printSeparator();
+        Serial.println("[WiFi]  ✗ Verbindung verloren – reconnect ...");
         connectWiFi();
         playStation();
     }
@@ -87,6 +111,7 @@ void loop() {
     // Nächster Sender
     if (pressed(btns[0])) {
         currentStation = (currentStation + 1) % NUM_STATIONS;
+        Serial.println("[BTN]   Senderwechsel gedrückt");
         playStation();
     }
 
@@ -94,19 +119,27 @@ void loop() {
     if (pressed(btns[1])) {
         muted = !muted;
         audio.setVolume(muted ? 0 : volume);
-        Serial.printf("[Radio] %s\n", muted ? "Muted" : "Unmuted");
+        Serial.printf("[BTN]   Mute → %s\n", muted ? "AN (stumm)" : "AUS (Ton)");
     }
 
     // Lauter
-    if (pressed(btns[2]) && !muted && volume < 21) {
-        audio.setVolume(++volume);
-        Serial.printf("[Radio] Lautstärke: %d\n", volume);
+    if (pressed(btns[2])) {
+        if (!muted && volume < 21) {
+            audio.setVolume(++volume);
+            Serial.printf("[BTN]   Volume +  → %d/21\n", volume);
+        } else if (volume >= 21) {
+            Serial.println("[BTN]   Volume +  → Maximum erreicht (21)");
+        }
     }
 
     // Leiser
-    if (pressed(btns[3]) && !muted && volume > 0) {
-        audio.setVolume(--volume);
-        Serial.printf("[Radio] Lautstärke: %d\n", volume);
+    if (pressed(btns[3])) {
+        if (!muted && volume > 0) {
+            audio.setVolume(--volume);
+            Serial.printf("[BTN]   Volume -  → %d/21\n", volume);
+        } else if (volume <= 0) {
+            Serial.println("[BTN]   Volume -  → Minimum erreicht (0)");
+        }
     }
 }
 
@@ -114,4 +147,9 @@ void loop() {
 void audio_info(const char* info)            { Serial.printf("[Info]    %s\n", info); }
 void audio_showstation(const char* info)     { Serial.printf("[Sender]  %s\n", info); }
 void audio_showstreamtitle(const char* info) { Serial.printf("[Titel]   %s\n", info); }
-void audio_eof_stream(const char* info)      { Serial.printf("[EOF]     %s – reconnect\n", info); playStation(); }
+void audio_bitrate(const char* info)         { Serial.printf("[Bitrate] %s\n", info); }
+void audio_commercial(const char* info)      { Serial.printf("[Werbung] %s\n", info); }
+void audio_icyurl(const char* info)          { Serial.printf("[ICY-URL] %s\n", info); }
+void audio_lasthost(const char* info)        { Serial.printf("[Host]    %s\n", info); }
+void audio_id3data(const char* info)         { Serial.printf("[ID3]     %s\n", info); }
+void audio_eof_stream(const char* info)      { Serial.printf("[EOF]     Stream Ende: %s – reconnect\n", info); playStation(); }
