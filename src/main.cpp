@@ -9,7 +9,7 @@
  *   GPIO5  → LRC
  *   GPIO6  → DIN
  *   3.3 V  → VIN
- *   GND    → GND + SD
+ *   GND    → GND   (SD-Pin floating lassen!)
  *
  * Taster (→ GND, INPUT_PULLUP)
  *   GPIO1  → Senderwechsel
@@ -28,9 +28,9 @@ const char* ssid     = "FRITZ!Box 5530 HC";
 const char* password = "63581191284534172960";
 
 // ── MAX98357A → I2S pins ──────────────────────────────────────────────────────
-#define I2S_BCLK  4   // GPIO4 → BCLK
-#define I2S_LRC   5   // GPIO5 → LRC
-#define I2S_DOUT  6   // GPIO6 → DIN
+#define I2S_BCLK  4
+#define I2S_LRC   5
+#define I2S_DOUT  6
 
 // ── Taster (INPUT_PULLUP, active LOW) ─────────────────────────────────────────
 #define BTN_NEXT     1
@@ -52,6 +52,9 @@ Audio audio;
 int   currentStation = 0;
 int   volume         = 12;   // 0–21
 bool  muted          = false;
+
+// Gesetzt vom EOF-Callback, ausgewertet im Loop (verhindert Re-Entrancy)
+volatile bool pendingStreamEnd = false;
 
 // ── Taster-Debounce ───────────────────────────────────────────────────────────
 struct Btn { uint8_t pin; bool last = HIGH, state = HIGH; uint32_t t = 0; };
@@ -76,7 +79,9 @@ void playStation() {
     Serial.printf("[Radio] ▶ Station %d/%d\n", currentStation + 1, NUM_STATIONS);
     Serial.printf("[Radio]   %s\n", stations[currentStation]);
     printSeparator();
+    audio.stopSong();
     audio.connecttohost(stations[currentStation]);
+    audio.setVolume(muted ? 0 : volume);
 }
 
 void connectWiFi() {
@@ -85,6 +90,7 @@ void connectWiFi() {
     Serial.print(ssid);
     Serial.print("\"");
     while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
+    WiFi.setSleep(false);
     Serial.printf("\n[WiFi]  ✓ Verbunden\n");
     Serial.printf("[WiFi]  IP  : %s\n", WiFi.localIP().toString().c_str());
     Serial.printf("[WiFi]  RSSI: %d dBm\n", WiFi.RSSI());
@@ -110,6 +116,7 @@ void setup() {
 
     Serial.println("[Audio] Initialisiere I2S ...");
     audio.setPinout(I2S_BCLK, I2S_LRC, I2S_DOUT);
+    audio.setAudioTaskCore(1);  // Core 1 = weg vom WiFi-Stack (Core 0) → kein Stottern
     audio.setVolume(volume);
     Serial.printf("[Audio] BCLK=GPIO%d  LRC=GPIO%d  DOUT=GPIO%d\n", I2S_BCLK, I2S_LRC, I2S_DOUT);
     Serial.printf("[Audio] Startlautstärke: %d/21\n", volume);
@@ -121,7 +128,26 @@ void setup() {
 void loop() {
     audio.loop();
 
-    // WiFi-Reconnect
+    // ── Debug: alle 5s Status ausgeben ────────────────────────────────────────
+    static uint32_t loopCount = 0;
+    static uint32_t lastDebug = 0;
+    loopCount++;
+    if (millis() - lastDebug >= 5000) {
+        lastDebug = millis();
+        Serial.printf("[Debug] Loops/s: %5lu  Heap: %6d  RSSI: %3d dBm  Audio: %s\n",
+            loopCount / 5,
+            ESP.getFreeHeap(),
+            WiFi.RSSI(),
+            audio.isRunning() ? "läuft" : "STOP");
+        loopCount = 0;
+    }
+
+    if (pendingStreamEnd) {
+        pendingStreamEnd = false;
+        // Nur reconnecten, kein stopSong/Volume-Reset → kein Lautstärke-Zyklus
+        audio.connecttohost(stations[currentStation]);
+    }
+
     if (WiFi.status() != WL_CONNECTED) {
         printSeparator();
         Serial.println("[WiFi]  ✗ Verbindung verloren – reconnect ...");
@@ -129,21 +155,18 @@ void loop() {
         playStation();
     }
 
-    // Nächster Sender
     if (pressed(btns[0])) {
         currentStation = (currentStation + 1) % NUM_STATIONS;
         Serial.println("[BTN]   Senderwechsel gedrückt");
         playStation();
     }
 
-    // Mute-Toggle
     if (pressed(btns[1])) {
         muted = !muted;
         audio.setVolume(muted ? 0 : volume);
         Serial.printf("[BTN]   Mute → %s\n", muted ? "AN (stumm)" : "AUS (Ton)");
     }
 
-    // Lauter
     if (pressed(btns[2])) {
         if (!muted && volume < 21) {
             audio.setVolume(++volume);
@@ -153,7 +176,6 @@ void loop() {
         }
     }
 
-    // Leiser
     if (pressed(btns[3])) {
         if (!muted && volume > 0) {
             audio.setVolume(--volume);
@@ -164,7 +186,7 @@ void loop() {
     }
 }
 
-// ── schreibfaul Callbacks ─────────────────────────────────────────────────────
+// ── Callbacks ─────────────────────────────────────────────────────────────────
 void audio_info(const char* info)            { Serial.printf("[Info]    %s\n", info); }
 void audio_showstation(const char* info)     { Serial.printf("[Sender]  %s\n", info); }
 void audio_showstreamtitle(const char* info) { Serial.printf("[Titel]   %s\n", info); }
@@ -173,4 +195,5 @@ void audio_commercial(const char* info)      { Serial.printf("[Werbung] %s\n", i
 void audio_icyurl(const char* info)          { Serial.printf("[ICY-URL] %s\n", info); }
 void audio_lasthost(const char* info)        { Serial.printf("[Host]    %s\n", info); }
 void audio_id3data(const char* info)         { Serial.printf("[ID3]     %s\n", info); }
-void audio_eof_stream(const char* info)      { Serial.printf("[EOF]     Stream Ende: %s – reconnect\n", info); playStation(); }
+void audio_eof_stream(const char* info)      { Serial.printf("[EOF]     %s\n", info); pendingStreamEnd = true; }
+void audio_error(const char* info)           { Serial.printf("[ERROR]   %s\n", info); }
